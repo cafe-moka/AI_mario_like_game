@@ -9,32 +9,31 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100dvh; /* スマホのUIバー（アドレスバー等）対策 */
+            height: 100dvh;
             width: 100vw;
             margin: 0;
             background-color: #222;
             color: #fff;
             font-family: sans-serif;
             flex-direction: column;
-            overflow: hidden; /* スクロール防止 */
-            touch-action: none; /* ピンチズーム等防止 */
+            overflow: hidden;
+            touch-action: none;
         }
         canvas {
             border: 4px solid #fff;
             border-radius: 4px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
             background-color: #000;
-            box-sizing: border-box; /* borderを含めてサイズ計算 */
+            box-sizing: border-box;
             
-            /* レスポンシブ・スケーリング（画面内に必ず収める） */
             max-width: 100vw;
             max-height: 100dvh;
             width: auto;
             height: auto;
-            aspect-ratio: 16 / 9; /* 800:450 のアスペクト比を維持 */
+            aspect-ratio: 16 / 9;
             object-fit: contain;
             
-            touch-action: none; /* Canvas上でのズームやスクロールを無効化 */
+            touch-action: none;
         }
         .instructions {
             margin-top: 15px;
@@ -49,9 +48,8 @@
             border: 1px solid #777;
         }
 
-        /* バーチャルパッドのスタイル */
         .controls {
-            display: none; /* デフォルトは非表示（PC用） */
+            display: none;
             position: absolute;
             bottom: 30px;
             width: 100%;
@@ -59,13 +57,13 @@
             justify-content: space-between;
             padding: 0 20px;
             box-sizing: border-box;
-            pointer-events: none; /* コンテナ自体はタッチを透過 */
+            pointer-events: none;
             z-index: 10;
         }
         .control-group {
             display: flex;
             gap: 15px;
-            pointer-events: auto; /* ボタンはタッチを受け付ける */
+            pointer-events: auto;
         }
         .btn {
             width: 65px;
@@ -88,23 +86,21 @@
             transform: scale(0.95);
         }
 
-        /* 画面幅が850px以下（スマホ等）の場合のみバーチャルパッドを表示 */
         @media (max-width: 850px) {
             .controls { display: flex; }
-            .instructions { display: none; } /* スマホ画面では説明を隠して領域確保 */
+            .instructions { display: none; }
         }
 
-        /* ランドスケープ（横画面）時の重なり・見切れ防止 */
         @media (max-height: 500px) {
             .controls {
                 bottom: 10px;
-                padding: 0 40px; /* 左右の端から少し離す */
+                padding: 0 40px;
             }
             .btn {
                 width: 50px;
                 height: 50px;
                 font-size: 24px;
-                background: rgba(255, 255, 255, 0.15); /* キャラクターを隠さないよう透明度を上げる */
+                background: rgba(255, 255, 255, 0.15);
             }
         }
     </style>
@@ -138,26 +134,6 @@
             this.isPlayingBGM = false;
             this.bgmInterval = null;
             this.unlocked = false;
-        }
-
-        // iOS Safari などの AudioContext 制限を解除する処理 (Audio Unlock)
-        unlock() {
-            if (this.unlocked) return;
-            
-            if (this.ctx.state === 'suspended') {
-                this.ctx.resume();
-            }
-
-            // 無音のオシレーターを一瞬だけ再生してブラウザに音声再生を許可させる
-            const osc = this.ctx.createOscillator();
-            const gain = this.ctx.createGain();
-            osc.connect(gain);
-            gain.connect(this.ctx.destination);
-            gain.gain.value = 0; // 無音
-            osc.start(this.ctx.currentTime);
-            osc.stop(this.ctx.currentTime + 0.001);
-
-            this.unlocked = true;
         }
 
         playSE(type) {
@@ -275,680 +251,20 @@
 
     const sound = new SoundManager();
 
-    // グローバルタッチイベントで一括アンロック
+    // ==========================================
+    // グローバルな Audio Unlock 処理
+    // ユーザーの直接的なアクションの同一コールバック内で完結させる
+    // ==========================================
     const unlockAudio = () => {
-        sound.unlock();
-        document.removeEventListener('touchstart', unlockAudio);
-        document.removeEventListener('touchend', unlockAudio);
-        document.removeEventListener('click', unlockAudio);
-    };
-    document.addEventListener('touchstart', unlockAudio, { once: true, passive: true });
-    document.addEventListener('touchend', unlockAudio, { once: true, passive: true });
-    document.addEventListener('click', unlockAudio, { once: true, passive: true });
-
-    // ==========================================
-    // ゲームパラメータ
-    // ==========================================
-    const GAME_CONFIG = {
-        gravity: 0.6,
-        baseJumpForce: -12,         // 通常時のジャンプ力
-        giantJumpMultiplier: 1.5,   // 巨大化時のジャンプ力倍率
-        bounceForce: -8,            // 敵を踏んだときの跳ねる力
-        moveAccel: 1.2,
-        maxSpeed: 6.0,
-        friction: 0.8,
-        airFriction: 0.95,
-        jumpCutMultiplier: 0.4,
-        coyoteTimeFrames: 6,
-        jumpBufferFrames: 6,
-        invincibleFrames: 60
-    };
-
-    const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
-
-    // ==========================================
-    // グローバル状態
-    // ==========================================
-    let gameState = 'playing'; // 'playing', 'transition', 'gameover', 'goal'
-    let transitionState = null; 
-    let transitionTimer = 0;
-    
-    let cameraX = 0;
-    let coinCount = 0;
-    let particles = [];
-    
-    let player;
-    let levels;
-    let currentLevelKey;
-    let currentLevel;
-    
-    let coyoteCounter = 0;
-    let jumpBufferCounter = 0;
-    let prevSpaceState = false;
-
-    // タイムアタック用
-    let gameStarted = false;
-    let startTime = 0;
-    let elapsedTime = 0;
-    let isTimerRunning = false;
-
-    const keys = { ArrowLeft: false, ArrowRight: false, ArrowDown: false, Space: false };
-
-    // ==========================================
-    // レベルデータのパターン自動生成
-    // ==========================================
-    function generateLevels() {
-        let overPlatforms = [ { x: 0, y: 400, width: 800, height: 50 } ];
-        let overBlocks = [];
-        let overEnemies = [];
-        let overCoins = [];
-        let overPipes = [];
-
-        for (let x = 800; x < 9500; x += 500) {
-            let gap = Math.random() < 0.3 ? 0 : 120 + Math.random() * 80; 
-            overPlatforms.push({ x: x + gap, y: 400, width: 500 - gap, height: 50 });
-
-            if (Math.random() < 0.6) {
-                let py = Math.random() < 0.5 ? 250 : 150;
-                overPlatforms.push({ x: x + 100 + gap, y: py, width: 150, height: 20 });
-                
-                if (Math.random() < 0.4) {
-                    overBlocks.push({ x: x + 150 + gap, y: py - 50, width: 32, height: 32, type: 'mushroom', hit: false });
-                } else {
-                    overCoins.push({ x: x + 150 + gap, y: py - 40, width: 32, height: 32, collected: false });
-                }
-            }
-
-            if (Math.random() < 0.2) {
-                overBlocks.push({ x: x + 150 + gap, y: 250, width: 32, height: 32, type: 'mushroom', hit: false });
-                overBlocks.push({ x: x + 182 + gap, y: 250, width: 32, height: 32, type: 'coin', hit: false });
-            }
-
-            if (Math.random() < 0.8) {
-                let isTurtle = Math.random() < 0.4;
-                overEnemies.push({ 
-                    type: isTurtle ? 'turtle' : 'goomba', 
-                    emoji: isTurtle ? '🐢' : '🌰',
-                    x: x + 300 + gap, y: 368, width: 32, height: 32, 
-                    vx: isTurtle ? -2.5 : -1.5,
-                    minX: x + gap, maxX: x + 500, dead: false 
-                });
-            }
-
-            overCoins.push({ x: x + 250 + gap, y: 300, width: 32, height: 32, collected: false });
-            overCoins.push({ x: x + 280 + gap, y: 300, width: 32, height: 32, collected: false });
-        }
-
-        overPlatforms.push({ x: 2000, y: 400, width: 500, height: 50 });
-        overPipes.push({ x: 2200, y: 350, width: 64, height: 50, type: 'pipe_down', color: '#32CD32' });
-
-        overPlatforms.push({ x: 9500, y: 400, width: 1000, height: 50 });
-        let goalObj = { x: 10000, y: 100, width: 10, height: 300, flagY: 370 };
-
-        let underPlatforms = [
-            { x: 0, y: 400, width: 500, height: 50 },
-            { x: 0, y: 0, width: 5500, height: 50 }
-        ];
-        let underBlocks = [];
-        let underEnemies = [];
-        let underCoins = [];
-        let underPipes = [];
-
-        for (let x = 500; x < 4500; x += 400) {
-            let gap = Math.random() < 0.3 ? 0 : 150;
-            underPlatforms.push({ x: x + gap, y: 400, width: 300, height: 50 });
-            
-            if (Math.random() < 0.7) {
-                let py = 200 + Math.random() * 80;
-                underPlatforms.push({ x: x + 100 + gap, y: py, width: 150, height: 20 });
-                if (Math.random() < 0.5) {
-                    underBlocks.push({ x: x + 150 + gap, y: py - 40, width: 32, height: 32, type: 'coin', hit: false });
-                }
-            }
-
-            underEnemies.push({ 
-                type: 'bat', emoji: '🦇',
-                x: x + 200, y: 50, width: 32, height: 32, 
-                triggered: false, vx: 0, vy: 0, dead: false 
-            });
-
-            if (gap === 0 || Math.random() < 0.6) {
-                let isTurtle = Math.random() < 0.4;
-                underEnemies.push({ 
-                    type: isTurtle ? 'turtle' : 'goomba', 
-                    emoji: isTurtle ? '🐢' : '🌰',
-                    x: x + 150 + gap, y: 368, width: 32, height: 32, 
-                    vx: isTurtle ? -2.0 : -1.0,
-                    minX: x + gap, maxX: x + 300, dead: false 
-                });
-            }
-
-            underCoins.push({ x: x + 200, y: 250, width: 32, height: 32, collected: false });
-        }
-
-        underPlatforms.push({ x: 4500, y: 400, width: 800, height: 50 });
-        underBlocks.push({ x: 4800, y: 300, width: 64, height: 20, type: 'solid', hit: true }); 
-        underPipes.push({ x: 4950, y: 240, width: 64, height: 60, type: 'pipe_up', color: '#FF0000' }); 
-
-        return {
-            overworld: {
-                bg: '#87CEEB',
-                platforms: overPlatforms, blocks: overBlocks, pipes: overPipes,
-                enemies: overEnemies, coins: overCoins, items: [], goal: goalObj
-            },
-            underground: {
-                bg: '#1a1a24',
-                platforms: underPlatforms, blocks: underBlocks, pipes: underPipes,
-                enemies: underEnemies, coins: underCoins, items: [], goal: null
-            }
-        };
-    }
-
-    // ==========================================
-    // ユーティリティ
-    // ==========================================
-    function formatTime(ms) {
-        let mins = Math.floor(ms / 60000);
-        let secs = Math.floor((ms % 60000) / 1000);
-        let millis = Math.floor((ms % 1000) / 10);
-        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${millis.toString().padStart(2, '0')}`;
-    }
-
-    function isIntersecting(r1, r2) {
-        return r1.x < r2.x + r2.width && r1.x + r1.width > r2.x &&
-               r1.y < r2.y + r2.height && r1.y + r1.height > r2.y;
-    }
-
-    function isIntersectingMargin(r1, r2, marginX = 0, marginY = 0) {
-        return r1.x + marginX < r2.x + r2.width && r1.x + r1.width - marginX > r2.x &&
-               r1.y + marginY < r2.y + r2.height && r1.y + r1.height - marginY > r2.y;
-    }
-
-    // ==========================================
-    // 初期化処理
-    // ==========================================
-    function initGame() {
-        player = {
-            emoji: '🧑‍🔧',
-            x: 100, y: 300,
-            baseWidth: 32, baseHeight: 32,
-            width: 32, height: 32,
-            vx: 0, vy: 0,
-            isGiant: false,
-            invincibleCounter: 0
-        };
-        cameraX = 0;
-        coinCount = 0;
-        particles = [];
-        levels = generateLevels();
-        currentLevelKey = 'overworld';
-        currentLevel = levels[currentLevelKey];
+        if (sound.unlocked) return;
         
-        gameState = 'playing';
-        transitionState = null;
-        coyoteCounter = 0; jumpBufferCounter = 0;
-
-        if (gameStarted) {
-            startTime = Date.now();
-            elapsedTime = 0;
-            isTimerRunning = true;
-            sound.startBGM(currentLevelKey);
-        } else {
-            elapsedTime = 0;
-        }
-    }
-
-    function initConfetti() {
-        for (let i = 0; i < 200; i++) {
-            particles.push({
-                x: cameraX + canvas.width / 2 + (Math.random() - 0.5) * 400,
-                y: Math.random() * -canvas.height,
-                vx: (Math.random() - 0.5) * 8, vy: Math.random() * 4 + 2,
-                color: `hsl(${Math.random() * 360}, 100%, 50%)`,
-                size: Math.random() * 6 + 4
-            });
-        }
-    }
-
-    // ゲーム開始共通処理
-    function startGameFlow() {
-        if (!gameStarted) {
-            gameStarted = true;
-            sound.unlock(); // iOS対策としてここでも実行
-            sound.startBGM(currentLevelKey);
-            startTime = Date.now();
-            isTimerRunning = true;
-        } else if (gameState === 'gameover' || gameState === 'goal') {
-            initGame();
-        }
-    }
-
-    // ==========================================
-    // 入力イベント (キーボード)
-    // ==========================================
-    window.addEventListener('keydown', (e) => {
-        if (['Space', 'ArrowLeft', 'ArrowRight', 'ArrowDown'].includes(e.code)) {
-            startGameFlow();
-            if (keys.hasOwnProperty(e.code)) {
-                keys[e.code] = true;
-                e.preventDefault();
-            }
-        }
-    });
-    window.addEventListener('keyup', (e) => {
-        if (keys.hasOwnProperty(e.code)) keys[e.code] = false;
-    });
-
-    // ==========================================
-    // 入力イベント (タッチ / バーチャルパッド)
-    // ==========================================
-    const touchMap = {
-        'btnLeft': 'ArrowLeft',
-        'btnRight': 'ArrowRight',
-        'btnDown': 'ArrowDown',
-        'btnJump': 'Space'
-    };
-
-    function bindTouchButton(elementId) {
-        const el = document.getElementById(elementId);
-        const code = touchMap[elementId];
-        
-        const onStart = (e) => {
-            e.preventDefault(); // スクロールやズームを防止
-            startGameFlow();
-            keys[code] = true;
-            el.classList.add('active');
-        };
-        const onEnd = (e) => {
-            e.preventDefault();
-            keys[code] = false;
-            el.classList.remove('active');
-        };
-
-        el.addEventListener('touchstart', onStart, { passive: false });
-        el.addEventListener('pointerdown', onStart, { passive: false });
-        
-        el.addEventListener('touchend', onEnd, { passive: false });
-        el.addEventListener('touchcancel', onEnd, { passive: false });
-        el.addEventListener('pointerup', onEnd, { passive: false });
-        el.addEventListener('pointercancel', onEnd, { passive: false });
-    }
-
-    ['btnLeft', 'btnRight', 'btnDown', 'btnJump'].forEach(bindTouchButton);
-
-    // Canvasタップでもゲーム開始/リトライできるようにする
-    canvas.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        startGameFlow();
-    }, { passive: false });
-    canvas.addEventListener('mousedown', () => startGameFlow());
-
-    function takeDamage() {
-        sound.playSE('damage');
-        if (player.isGiant) {
-            player.isGiant = false;
-            player.height = player.baseHeight; player.width = player.baseWidth;
-            player.y += player.baseHeight; 
-            player.invincibleCounter = GAME_CONFIG.invincibleFrames;
-        } else {
-            gameState = 'gameover';
-            isTimerRunning = false;
-            sound.stopBGM();
-        }
-    }
-
-    // ==========================================
-    // メイン更新ループ
-    // ==========================================
-    function update() {
-        const spaceJustPressed = (keys.Space && !prevSpaceState);
-        const spaceJustReleased = (!keys.Space && prevSpaceState);
-        prevSpaceState = keys.Space;
-
-        if (isTimerRunning) {
-            elapsedTime = Date.now() - startTime;
+        if (sound.ctx.state === 'suspended') {
+            sound.ctx.resume();
         }
 
-        if (gameState === 'gameover') {
-            return; // リトライ処理はstartGameFlowでハンドリング
-        }
-
-        if (gameState === 'goal') {
-            if (currentLevel.goal.flagY > currentLevel.goal.y) {
-                currentLevel.goal.flagY -= 2; player.y -= 2;
-            }
-            for (let p of particles) { p.x += p.vx; p.y += p.vy; }
-            return;
-        }
-
-        if (gameState === 'transition') {
-            if (transitionState === 'entering_down') player.y += 1.5;
-            if (transitionState === 'entering_up') player.y -= 1.5;   
-            
-            transitionTimer--;
-            if (transitionTimer <= 0) {
-                if (transitionState === 'entering_down') {
-                    currentLevelKey = 'underground'; currentLevel = levels[currentLevelKey];
-                    player.x = 100; player.y = 50;
-                    sound.startBGM('underground');
-                } else if (transitionState === 'entering_up') {
-                    currentLevelKey = 'overworld'; currentLevel = levels[currentLevelKey];
-                    player.x = 9000; player.y = 300;
-                    sound.startBGM('overworld');
-                }
-                cameraX = player.x - canvas.width / 2;
-                player.vx = 0; player.vy = 0;
-                gameState = 'playing';
-            }
-            return; 
-        }
-
-        if (player.invincibleCounter > 0) player.invincibleCounter--;
-
-        const solidObstacles = [...currentLevel.platforms, ...currentLevel.blocks, ...(currentLevel.pipes || [])];
-
-        // 1. X軸移動
-        if (keys.ArrowRight) player.vx += GAME_CONFIG.moveAccel;
-        else if (keys.ArrowLeft) player.vx -= GAME_CONFIG.moveAccel;
-
-        if (player.vx > GAME_CONFIG.maxSpeed) player.vx = GAME_CONFIG.maxSpeed;
-        if (player.vx < -GAME_CONFIG.maxSpeed) player.vx = -GAME_CONFIG.maxSpeed;
-
-        player.x += player.vx;
-        for (let plat of solidObstacles) {
-            if (isIntersectingMargin(player, plat, 0, 4)) {
-                if (player.vx > 0) { player.x = plat.x - player.width; player.vx = 0; }
-                else if (player.vx < 0) { player.x = plat.x + plat.width; player.vx = 0; }
-            }
-        }
-        if (player.x < cameraX) { player.x = cameraX; player.vx = 0; }
-
-        // 2. Y軸移動と衝突
-        player.vy += GAME_CONFIG.gravity;
-        if (spaceJustReleased && player.vy < 0) player.vy *= GAME_CONFIG.jumpCutMultiplier;
-
-        player.y += player.vy;
-        let onGround = false; let pipeHitUp = null;
-
-        for (let plat of solidObstacles) {
-            if (isIntersecting(player, plat)) {
-                if (player.vy > 0) { 
-                    player.y = plat.y - player.height; player.vy = 0; onGround = true;
-                    if (plat.type === 'pipe_down' && keys.ArrowDown) {
-                        let playerCenterX = player.x + player.width / 2;
-                        if (playerCenterX >= plat.x && playerCenterX <= plat.x + plat.width) {
-                            gameState = 'transition'; transitionState = 'entering_down'; transitionTimer = 40;
-                            sound.playSE('pipe');
-                            keys.ArrowDown = false; // 連続発動防止
-                        }
-                    }
-                } else if (player.vy < 0) { 
-                    player.y = plat.y + plat.height;
-                    if (plat.type === 'pipe_up') pipeHitUp = plat;
-                    player.vy = 0;
-                    if (currentLevel.blocks.includes(plat) && !plat.hit) {
-                        plat.hit = true;
-                        if (plat.type === 'mushroom') {
-                            currentLevel.items.push({ x: plat.x, y: plat.y - 32, width: 32, height: 32, vx: 2, vy: -4, type: 'mushroom', emoji: '🍄' });
-                            sound.playSE('jump');
-                        } else if (plat.type === 'coin') {
-                            coinCount++;
-                            sound.playSE('coin');
-                        }
-                    }
-                }
-            }
-        }
-
-        if (pipeHitUp) {
-            let playerCenterX = player.x + player.width / 2;
-            if (playerCenterX >= pipeHitUp.x - 10 && playerCenterX <= pipeHitUp.x + pipeHitUp.width + 10) {
-                gameState = 'transition'; transitionState = 'entering_up'; transitionTimer = 40;
-                player.vx = 0; player.x = pipeHitUp.x + pipeHitUp.width/2 - player.width/2;
-                sound.playSE('pipe');
-            }
-        }
-
-        if (!keys.ArrowLeft && !keys.ArrowRight) {
-            player.vx *= onGround ? GAME_CONFIG.friction : GAME_CONFIG.airFriction;
-            if (Math.abs(player.vx) < 0.1) player.vx = 0;
-        }
-
-        // 3. ジャンプ制御
-        const currentJumpForce = player.isGiant ? GAME_CONFIG.baseJumpForce * GAME_CONFIG.giantJumpMultiplier : GAME_CONFIG.baseJumpForce;
-        if (onGround) coyoteCounter = GAME_CONFIG.coyoteTimeFrames;
-        else if (coyoteCounter > 0) coyoteCounter--;
-
-        if (spaceJustPressed) jumpBufferCounter = GAME_CONFIG.jumpBufferFrames;
-        else if (jumpBufferCounter > 0) jumpBufferCounter--;
-
-        if (jumpBufferCounter > 0 && coyoteCounter > 0) {
-            player.vy = currentJumpForce;
-            jumpBufferCounter = 0; coyoteCounter = 0; 
-            sound.playSE('jump');
-        }
-
-        // 4. アイテムとコイン
-        for (let i = currentLevel.items.length - 1; i >= 0; i--) {
-            let item = currentLevel.items[i];
-            item.vy += GAME_CONFIG.gravity;
-            item.x += item.vx; item.y += item.vy;
-            for (let plat of solidObstacles) {
-                if (isIntersecting(item, plat)) {
-                    if (item.vy > 0) { item.y = plat.y - item.height; item.vy = 0; }
-                    else if (isIntersecting(item, plat)) item.vx *= -1;
-                }
-            }
-            if (isIntersecting(player, item)) {
-                if (item.type === 'mushroom' && !player.isGiant) {
-                    player.isGiant = true;
-                    player.y -= player.baseHeight; 
-                    player.height = player.baseHeight * 2; player.width = player.baseWidth * 2;
-                    sound.playSE('giant');
-                }
-                currentLevel.items.splice(i, 1);
-            }
-        }
-
-        for (let coin of currentLevel.coins) {
-            if (!coin.collected && isIntersecting(player, coin)) {
-                coin.collected = true; coinCount++;
-                sound.playSE('coin');
-            }
-        }
-
-        // 5. 敵AIと判定
-        for (let enemy of currentLevel.enemies) {
-            if (enemy.dead) {
-                enemy.y += GAME_CONFIG.gravity * 2; 
-                continue;
-            }
-            if (enemy.type === 'bat') {
-                if (!enemy.triggered && Math.abs(player.x - enemy.x) < 300) {
-                    enemy.triggered = true;
-                }
-                if (enemy.triggered) {
-                    let dx = (player.x + player.width/2) - (enemy.x + enemy.width/2);
-                    let dy = (player.y + player.height/2) - (enemy.y + enemy.height/2);
-                    let dist = Math.sqrt(dx*dx + dy*dy);
-                    if (dist > 0) {
-                        enemy.vx = (dx / dist) * 2.5;
-                        enemy.vy = (dy / dist) * 2.5;
-                    }
-                    enemy.x += enemy.vx; enemy.y += enemy.vy;
-                }
-            } else {
-                enemy.x += enemy.vx;
-                if (enemy.x <= enemy.minX || enemy.x + enemy.width >= enemy.maxX) enemy.vx *= -1;
-            }
-
-            if (isIntersecting(player, enemy)) {
-                if (enemy.type === 'bat') {
-                    let hitFromAbove = (player.vy > 0 && player.y + player.height - player.vy <= enemy.y + enemy.height / 2);
-                    let hitFromBelow = (player.vy <= 0 && player.y <= enemy.y + enemy.height / 2);
-                    
-                    if (hitFromAbove || hitFromBelow) { 
-                        player.vy = GAME_CONFIG.bounceForce; enemy.dead = true; sound.playSE('jump');
-                    } 
-                    else if (player.invincibleCounter <= 0) { takeDamage(); }
-                } else {
-                    if (player.vy > 0 && player.y + player.height - player.vy <= enemy.y + enemy.height / 2) {
-                        player.vy = GAME_CONFIG.bounceForce; enemy.dead = true; sound.playSE('jump');
-                    } else if (player.invincibleCounter <= 0) { takeDamage(); }
-                }
-            }
-        }
-
-        // 6. ゴール判定
-        if (currentLevel.goal && isIntersecting(player, currentLevel.goal)) {
-            gameState = 'goal'; player.vx = 0; player.vy = 0;
-            player.x = currentLevel.goal.x - player.width / 2 + currentLevel.goal.width / 2;
-            isTimerRunning = false;
-            sound.stopBGM();
-            sound.playSE('goal');
-            initConfetti();
-            
-            // 操作キーのリセット
-            keys.ArrowLeft = keys.ArrowRight = keys.ArrowDown = keys.Space = false;
-        }
-
-        // 7. カメラと落下
-        const targetCameraX = player.x - canvas.width / 2 + player.width / 2;
-        if (targetCameraX > cameraX) cameraX = targetCameraX;
-        if (player.y > canvas.height) {
-            gameState = 'gameover';
-            isTimerRunning = false;
-            sound.stopBGM();
-            keys.ArrowLeft = keys.ArrowRight = keys.ArrowDown = keys.Space = false;
-        }
-    }
-
-    // ==========================================
-    // 描画用の共通ヘルパー関数
-    // ==========================================
-    function drawEmoji(emoji, x, y, width, height, alpha = 1.0) {
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        let fontSize = Math.max(width, height);
-        ctx.font = `${fontSize}px sans-serif`;
-        ctx.fillText(emoji, x + width / 2, y + height / 2 + 4); 
-        ctx.restore();
-    }
-
-    // ==========================================
-    // メイン描画処理
-    // ==========================================
-    function draw() {
-        ctx.fillStyle = currentLevel.bg;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        ctx.save();
-        ctx.translate(-cameraX, 0);
-
-        // ゴールポールと旗
-        if (currentLevel.goal) {
-            ctx.fillStyle = '#FFF'; 
-            ctx.fillRect(currentLevel.goal.x, currentLevel.goal.y, currentLevel.goal.width, currentLevel.goal.height);
-            ctx.fillStyle = '#32CD32'; 
-            ctx.fillRect(currentLevel.goal.x - 40, currentLevel.goal.flagY, 40, 30);
-        }
-
-        // 床・壁・空中足場
-        for (let plat of currentLevel.platforms) {
-            ctx.fillStyle = (currentLevelKey === 'overworld') ? '#8B4513' : '#333';
-            ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
-            ctx.fillStyle = (currentLevelKey === 'overworld') ? '#32CD32' : '#555'; 
-            ctx.fillRect(plat.x, plat.y, plat.width, 4);
-        }
-
-        // 土管
-        for (let pipe of currentLevel.pipes) {
-            ctx.fillStyle = pipe.color; ctx.fillRect(pipe.x, pipe.y, pipe.width, pipe.height);
-            const lipHeight = 15;
-            if (pipe.type === 'pipe_down') ctx.fillRect(pipe.x - 4, pipe.y, pipe.width + 8, lipHeight);
-            else ctx.fillRect(pipe.x - 4, pipe.y + pipe.height - lipHeight, pipe.width + 8, lipHeight);
-            ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.fillRect(pipe.x + 10, pipe.y, 10, pipe.height);
-        }
-
-        // ブロック
-        for (let block of currentLevel.blocks) {
-            ctx.fillStyle = block.hit ? '#8B4513' : '#FFA500';
-            ctx.fillRect(block.x, block.y, block.width, block.height);
-            if (!block.hit && block.type !== 'solid') {
-                ctx.fillStyle = '#FFF'; ctx.font = '24px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.fillText('?', block.x + block.width/2, block.y + block.height/2 + 2);
-            }
-        }
-
-        // コインとアイテム
-        for (let coin of currentLevel.coins) {
-            if (!coin.collected) drawEmoji('🪙', coin.x, coin.y, coin.width, coin.height);
-        }
-        for (let item of currentLevel.items) {
-            drawEmoji(item.emoji, item.x, item.y, item.width, item.height);
-        }
-
-        // 敵
-        for (let enemy of currentLevel.enemies) {
-            let alpha = enemy.dead ? 0.3 : 1.0;
-            drawEmoji(enemy.emoji, enemy.x, enemy.y, enemy.width, enemy.height, alpha);
-        }
-
-        // プレイヤー
-        if (player.invincibleCounter === 0 || Math.floor(player.invincibleCounter / 5) % 2 === 0) {
-            drawEmoji(player.emoji, player.x, player.y, player.width, player.height);
-        }
-
-        // パーティクル
-        if (gameState === 'goal') {
-            for (let p of particles) {
-                ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.size, p.size);
-            }
-        }
-
-        ctx.restore();
-
-        // --- UIレイヤー ---
-        ctx.fillStyle = '#FFF'; ctx.font = 'bold 24px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-        ctx.fillText('🪙 COIN: ' + coinCount, 20, 40);
-        
-        // タイムアタック描画
-        ctx.font = 'bold 20px sans-serif';
-        ctx.fillText('TIME: ' + formatTime(elapsedTime), 20, 70);
-
-        if (!gameStarted) {
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#FFF'; ctx.font = 'bold 36px sans-serif'; ctx.textAlign = 'center';
-            ctx.fillText('Tap or Press SPACE to Start', canvas.width / 2, canvas.height / 2);
-        } else if (gameState === 'gameover') {
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#FFF'; ctx.font = 'bold 48px sans-serif'; ctx.textAlign = 'center';
-            ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 20);
-            ctx.font = '24px sans-serif'; ctx.fillText('Tap or Press SPACE to Retry', canvas.width / 2, canvas.height / 2 + 30);
-        } else if (gameState === 'goal') {
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#FFF'; ctx.font = 'bold 48px sans-serif'; ctx.textAlign = 'center';
-            ctx.shadowColor = 'black'; ctx.shadowBlur = 10;
-            ctx.fillText('STAGE CLEAR!', canvas.width / 2, canvas.height / 2 - 40);
-            ctx.shadowBlur = 0; 
-            
-            ctx.fillStyle = '#FFD700'; ctx.font = 'bold 32px sans-serif';
-            ctx.fillText('Clear Time: ' + formatTime(elapsedTime), canvas.width / 2, canvas.height / 2 + 10);
-            
-            ctx.fillStyle = '#FFF'; ctx.font = '24px sans-serif';
-            ctx.fillText('Tap or Press SPACE to Play Again', canvas.width / 2, canvas.height / 2 + 60);
-        }
-    }
-
-    function gameLoop() {
-        update(); draw(); requestAnimationFrame(gameLoop);
-    }
-
-    initGame(); requestAnimationFrame(gameLoop);
-
-</script>
-</body>
-</html>
+        // ブラウザの最適化（無音無視）を突破するため、極小の可聴音を一瞬だけ再生する
+        const osc = sound.ctx.createOscillator();
+        const gain = sound.ctx.createGain();
+        osc.connect(gain);
+        gain.connect(sound.ctx.destination);
+        gain
