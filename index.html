@@ -4,11 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>2D Platformer - Final Emoji Stage</title>
+    <link rel="icon" href="data:,">
     <style>
         body {
             display: flex;
             justify-content: center;
             align-items: center;
+            /* 古い端末用フォールバック設定 */
+            height: 100vh;
             height: 100dvh;
             width: 100vw;
             margin: 0;
@@ -16,24 +19,27 @@
             color: #fff;
             font-family: sans-serif;
             flex-direction: column;
-            overflow: hidden;
-            touch-action: none;
+            overflow: hidden; /* スクロール防止 */
+            touch-action: none; /* ピンチズーム等防止 */
         }
         canvas {
             border: 4px solid #fff;
             border-radius: 4px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
             background-color: #000;
-            box-sizing: border-box;
+            box-sizing: border-box; /* borderを含めてサイズ計算 */
             
+            /* レスポンシブ・スケーリング（画面内に必ず収める） */
             max-width: 100vw;
+            /* 古い端末用フォールバック設定 */
+            max-height: 100vh;
             max-height: 100dvh;
             width: auto;
             height: auto;
-            aspect-ratio: 16 / 9;
+            aspect-ratio: 16 / 9; /* 800:450 のアスペクト比を維持 */
             object-fit: contain;
             
-            touch-action: none;
+            touch-action: none; /* Canvas上でのズームやスクロールを無効化 */
         }
         .instructions {
             margin-top: 15px;
@@ -48,8 +54,9 @@
             border: 1px solid #777;
         }
 
+        /* バーチャルパッドのスタイル */
         .controls {
-            display: none;
+            display: none; /* デフォルトは非表示（PC用） */
             position: absolute;
             bottom: 30px;
             width: 100%;
@@ -57,13 +64,13 @@
             justify-content: space-between;
             padding: 0 20px;
             box-sizing: border-box;
-            pointer-events: none;
+            pointer-events: none; /* コンテナ自体はタッチを透過 */
             z-index: 10;
         }
         .control-group {
             display: flex;
             gap: 15px;
-            pointer-events: auto;
+            pointer-events: auto; /* ボタンはタッチを受け付ける */
         }
         .btn {
             width: 65px;
@@ -86,21 +93,23 @@
             transform: scale(0.95);
         }
 
+        /* 画面幅が850px以下（スマホ等）の場合のみバーチャルパッドを表示 */
         @media (max-width: 850px) {
             .controls { display: flex; }
-            .instructions { display: none; }
+            .instructions { display: none; } /* スマホ画面では説明を隠して領域確保 */
         }
 
+        /* ランドスケープ（横画面）時の重なり・見切れ防止 */
         @media (max-height: 500px) {
             .controls {
                 bottom: 10px;
-                padding: 0 40px;
+                padding: 0 40px; /* 左右の端から少し離す */
             }
             .btn {
                 width: 50px;
                 height: 50px;
                 font-size: 24px;
-                background: rgba(255, 255, 255, 0.15);
+                background: rgba(255, 255, 255, 0.15); /* キャラクターを隠さないよう透明度を上げる */
             }
         }
     </style>
@@ -130,14 +139,18 @@
     // ==========================================
     class SoundManager {
         constructor() {
-            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            // 自動生成を禁止し、最初はnullにしておく（ポリシー違反でのクラッシュ回避）
+            this.ctx = null;
             this.isPlayingBGM = false;
             this.bgmInterval = null;
             this.unlocked = false;
         }
 
         playSE(type) {
+            // ガード節：Contextが未生成の場合は何もしない
+            if (!this.ctx) return;
             if (this.ctx.state === 'suspended') return;
+
             const osc = this.ctx.createOscillator();
             const gain = this.ctx.createGain();
             osc.connect(gain);
@@ -212,7 +225,10 @@
         }
 
         startBGM(type = 'overworld') {
+            // ガード節
+            if (!this.ctx) return;
             if (this.isPlayingBGM) this.stopBGM();
+            
             this.isPlayingBGM = true;
             let noteIdx = 0;
             let notes = [];
@@ -227,7 +243,7 @@
             }
             
             this.bgmInterval = setInterval(() => {
-                if (this.ctx.state === 'suspended') return;
+                if (!this.ctx || this.ctx.state === 'suspended') return;
                 const osc = this.ctx.createOscillator();
                 const gain = this.ctx.createGain();
                 osc.type = (type === 'overworld') ? 'square' : 'triangle';
@@ -244,6 +260,7 @@
         }
 
         stopBGM() {
+            if (!this.ctx) return;
             this.isPlayingBGM = false;
             clearInterval(this.bgmInterval);
         }
@@ -258,6 +275,11 @@
     const unlockAudio = () => {
         if (sound.unlocked) return;
         
+        // ここで初めてAudioContextを生成する
+        if (!sound.ctx) {
+            sound.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
         if (sound.ctx.state === 'suspended') {
             sound.ctx.resume();
         }
@@ -514,7 +536,7 @@
         }
     }
 
-    // ゲーム開始共通処理（イベントリスナーに統合済みのためシンプルなフロー制御に特化）
+    // ゲーム開始共通処理
     function startGameFlow() {
         if (!gameStarted) {
             // 初回操作時は強制的にUnlockを通す（documentリスナーより早く個別ボタン処理が発火した時の保険）
@@ -609,7 +631,9 @@
             elapsedTime = Date.now() - startTime;
         }
 
-        if (gameState === 'gameover') return;
+        if (gameState === 'gameover') {
+            return; // リトライ処理はstartGameFlowでハンドリング
+        }
 
         if (gameState === 'goal') {
             if (currentLevel.goal.flagY > currentLevel.goal.y) {
@@ -677,7 +701,7 @@
                         if (playerCenterX >= plat.x && playerCenterX <= plat.x + plat.width) {
                             gameState = 'transition'; transitionState = 'entering_down'; transitionTimer = 40;
                             sound.playSE('pipe');
-                            keys.ArrowDown = false;
+                            keys.ArrowDown = false; // 連続発動防止
                         }
                     }
                 } else if (player.vy < 0) { 
@@ -805,6 +829,8 @@
             sound.stopBGM();
             sound.playSE('goal');
             initConfetti();
+            
+            // 操作キーのリセット
             keys.ArrowLeft = keys.ArrowRight = keys.ArrowDown = keys.Space = false;
         }
 
