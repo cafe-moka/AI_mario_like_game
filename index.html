@@ -621,4 +621,418 @@
     // ==========================================
     // 入力イベント (タッチ / バーチャルパッド)
     // ==========================================
-    const
+    const touchMap = {
+        'btnLeft': 'ArrowLeft',
+        'btnRight': 'ArrowRight',
+        'btnDown': 'ArrowDown',
+        'btnJump': 'Space'
+    };
+
+    function bindTouchButton(elementId) {
+        const el = document.getElementById(elementId);
+        const code = touchMap[elementId];
+        
+        const onStart = (e) => {
+            e.preventDefault(); // スクロールやズームを防止
+            startGameFlow(); // ゲーム開始後やリトライ時に呼ばれる
+            keys[code] = true;
+            el.classList.add('active');
+        };
+        const onEnd = (e) => {
+            e.preventDefault();
+            keys[code] = false;
+            el.classList.remove('active');
+        };
+
+        el.addEventListener('touchstart', onStart, { passive: false });
+        el.addEventListener('pointerdown', onStart, { passive: false });
+        
+        el.addEventListener('touchend', onEnd, { passive: false });
+        el.addEventListener('touchcancel', onEnd, { passive: false });
+        el.addEventListener('pointerup', onEnd, { passive: false });
+        el.addEventListener('pointercancel', onEnd, { passive: false });
+    }
+
+    ['btnLeft', 'btnRight', 'btnDown', 'btnJump'].forEach(bindTouchButton);
+
+    canvas.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        startGameFlow();
+    }, { passive: false });
+    canvas.addEventListener('mousedown', () => startGameFlow());
+
+    function takeDamage() {
+        sound.playSE('damage');
+        if (player.isGiant) {
+            player.isGiant = false;
+            player.height = player.baseHeight; player.width = player.baseWidth;
+            player.y += player.baseHeight; 
+            player.invincibleCounter = GAME_CONFIG.invincibleFrames;
+        } else {
+            gameState = 'gameover';
+            isTimerRunning = false;
+            sound.stopBGM();
+        }
+    }
+
+    // ==========================================
+    // メイン更新ループ
+    // ==========================================
+    function update() {
+        const spaceJustPressed = (keys.Space && !prevSpaceState);
+        const spaceJustReleased = (!keys.Space && prevSpaceState);
+        prevSpaceState = keys.Space;
+
+        if (isTimerRunning) {
+            elapsedTime = Date.now() - startTime;
+        }
+
+        if (gameState === 'gameover') {
+            return; // リトライ処理はstartGameFlowでハンドリング
+        }
+
+        if (gameState === 'goal') {
+            if (currentLevel.goal.flagY > currentLevel.goal.y) {
+                currentLevel.goal.flagY -= 2; player.y -= 2;
+            }
+            for (let p of particles) { p.x += p.vx; p.y += p.vy; }
+            return;
+        }
+
+        if (gameState === 'transition') {
+            if (transitionState === 'entering_down') player.y += 1.5;
+            if (transitionState === 'entering_up') player.y -= 1.5;   
+            
+            transitionTimer--;
+            if (transitionTimer <= 0) {
+                if (transitionState === 'entering_down') {
+                    currentLevelKey = 'underground'; currentLevel = levels[currentLevelKey];
+                    player.x = 100; player.y = 50;
+                    sound.startBGM('underground');
+                } else if (transitionState === 'entering_up') {
+                    currentLevelKey = 'overworld'; currentLevel = levels[currentLevelKey];
+                    player.x = 9000; player.y = 300;
+                    sound.startBGM('overworld');
+                }
+                cameraX = player.x - canvas.width / 2;
+                player.vx = 0; player.vy = 0;
+                gameState = 'playing';
+            }
+            return; 
+        }
+
+        if (player.invincibleCounter > 0) player.invincibleCounter--;
+
+        const solidObstacles = [...currentLevel.platforms, ...currentLevel.blocks, ...(currentLevel.pipes || [])];
+
+        // 1. X軸移動
+        if (keys.ArrowRight) player.vx += GAME_CONFIG.moveAccel;
+        else if (keys.ArrowLeft) player.vx -= GAME_CONFIG.moveAccel;
+
+        if (player.vx > GAME_CONFIG.maxSpeed) player.vx = GAME_CONFIG.maxSpeed;
+        if (player.vx < -GAME_CONFIG.maxSpeed) player.vx = -GAME_CONFIG.maxSpeed;
+
+        player.x += player.vx;
+        for (let plat of solidObstacles) {
+            if (isIntersectingMargin(player, plat, 0, 4)) {
+                if (player.vx > 0) { player.x = plat.x - player.width; player.vx = 0; }
+                else if (player.vx < 0) { player.x = plat.x + plat.width; player.vx = 0; }
+            }
+        }
+        if (player.x < cameraX) { player.x = cameraX; player.vx = 0; }
+
+        // 2. Y軸移動と衝突
+        player.vy += GAME_CONFIG.gravity;
+        if (spaceJustReleased && player.vy < 0) player.vy *= GAME_CONFIG.jumpCutMultiplier;
+
+        player.y += player.vy;
+        let onGround = false; let pipeHitUp = null;
+
+        for (let plat of solidObstacles) {
+            if (isIntersecting(player, plat)) {
+                if (player.vy > 0) { 
+                    player.y = plat.y - player.height; player.vy = 0; onGround = true;
+                    if (plat.type === 'pipe_down' && keys.ArrowDown) {
+                        let playerCenterX = player.x + player.width / 2;
+                        if (playerCenterX >= plat.x && playerCenterX <= plat.x + plat.width) {
+                            gameState = 'transition'; transitionState = 'entering_down'; transitionTimer = 40;
+                            sound.playSE('pipe');
+                            keys.ArrowDown = false; // 連続発動防止
+                        }
+                    }
+                } else if (player.vy < 0) { 
+                    player.y = plat.y + plat.height;
+                    if (plat.type === 'pipe_up') pipeHitUp = plat;
+                    player.vy = 0;
+                    if (currentLevel.blocks.includes(plat) && !plat.hit) {
+                        plat.hit = true;
+                        if (plat.type === 'mushroom') {
+                            currentLevel.items.push({ x: plat.x, y: plat.y - 32, width: 32, height: 32, vx: 2, vy: -4, type: 'mushroom', emoji: '🍄' });
+                            sound.playSE('jump');
+                        } else if (plat.type === 'coin') {
+                            coinCount++;
+                            sound.playSE('coin');
+                        }
+                    }
+                }
+            }
+        }
+
+        if (pipeHitUp) {
+            let playerCenterX = player.x + player.width / 2;
+            if (playerCenterX >= pipeHitUp.x - 10 && playerCenterX <= pipeHitUp.x + pipeHitUp.width + 10) {
+                gameState = 'transition'; transitionState = 'entering_up'; transitionTimer = 40;
+                player.vx = 0; player.x = pipeHitUp.x + pipeHitUp.width/2 - player.width/2;
+                sound.playSE('pipe');
+            }
+        }
+
+        if (!keys.ArrowLeft && !keys.ArrowRight) {
+            player.vx *= onGround ? GAME_CONFIG.friction : GAME_CONFIG.airFriction;
+            if (Math.abs(player.vx) < 0.1) player.vx = 0;
+        }
+
+        // 3. ジャンプ制御
+        const currentJumpForce = player.isGiant ? GAME_CONFIG.baseJumpForce * GAME_CONFIG.giantJumpMultiplier : GAME_CONFIG.baseJumpForce;
+        if (onGround) coyoteCounter = GAME_CONFIG.coyoteTimeFrames;
+        else if (coyoteCounter > 0) coyoteCounter--;
+
+        if (spaceJustPressed) jumpBufferCounter = GAME_CONFIG.jumpBufferFrames;
+        else if (jumpBufferCounter > 0) jumpBufferCounter--;
+
+        if (jumpBufferCounter > 0 && coyoteCounter > 0) {
+            player.vy = currentJumpForce;
+            jumpBufferCounter = 0; coyoteCounter = 0; 
+            sound.playSE('jump');
+        }
+
+        // 4. アイテムとコイン
+        for (let i = currentLevel.items.length - 1; i >= 0; i--) {
+            let item = currentLevel.items[i];
+            item.vy += GAME_CONFIG.gravity;
+            item.x += item.vx; item.y += item.vy;
+            for (let plat of solidObstacles) {
+                if (isIntersecting(item, plat)) {
+                    if (item.vy > 0) { item.y = plat.y - item.height; item.vy = 0; }
+                    else if (isIntersecting(item, plat)) item.vx *= -1;
+                }
+            }
+            if (isIntersecting(player, item)) {
+                if (item.type === 'mushroom' && !player.isGiant) {
+                    player.isGiant = true;
+                    player.y -= player.baseHeight; 
+                    player.height = player.baseHeight * 2; player.width = player.baseWidth * 2;
+                    sound.playSE('giant');
+                }
+                currentLevel.items.splice(i, 1);
+            }
+        }
+
+        for (let coin of currentLevel.coins) {
+            if (!coin.collected && isIntersecting(player, coin)) {
+                coin.collected = true; coinCount++;
+                sound.playSE('coin');
+            }
+        }
+
+        // 5. 敵AIと判定
+        for (let enemy of currentLevel.enemies) {
+            if (enemy.dead) {
+                enemy.y += GAME_CONFIG.gravity * 2; 
+                continue;
+            }
+            if (enemy.type === 'bat') {
+                if (!enemy.triggered && Math.abs(player.x - enemy.x) < 300) {
+                    enemy.triggered = true;
+                }
+                if (enemy.triggered) {
+                    let dx = (player.x + player.width/2) - (enemy.x + enemy.width/2);
+                    let dy = (player.y + player.height/2) - (enemy.y + enemy.height/2);
+                    let dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist > 0) {
+                        enemy.vx = (dx / dist) * 2.5;
+                        enemy.vy = (dy / dist) * 2.5;
+                    }
+                    enemy.x += enemy.vx; enemy.y += enemy.vy;
+                }
+            } else {
+                enemy.x += enemy.vx;
+                if (enemy.x <= enemy.minX || enemy.x + enemy.width >= enemy.maxX) enemy.vx *= -1;
+            }
+
+            if (isIntersecting(player, enemy)) {
+                if (enemy.type === 'bat') {
+                    let hitFromAbove = (player.vy > 0 && player.y + player.height - player.vy <= enemy.y + enemy.height / 2);
+                    let hitFromBelow = (player.vy <= 0 && player.y <= enemy.y + enemy.height / 2);
+                    
+                    if (hitFromAbove || hitFromBelow) { 
+                        player.vy = GAME_CONFIG.bounceForce; enemy.dead = true; sound.playSE('jump');
+                    } 
+                    else if (player.invincibleCounter <= 0) { takeDamage(); }
+                } else {
+                    if (player.vy > 0 && player.y + player.height - player.vy <= enemy.y + enemy.height / 2) {
+                        player.vy = GAME_CONFIG.bounceForce; enemy.dead = true; sound.playSE('jump');
+                    } else if (player.invincibleCounter <= 0) { takeDamage(); }
+                }
+            }
+        }
+
+        // 6. ゴール判定
+        if (currentLevel.goal && isIntersecting(player, currentLevel.goal)) {
+            gameState = 'goal'; player.vx = 0; player.vy = 0;
+            player.x = currentLevel.goal.x - player.width / 2 + currentLevel.goal.width / 2;
+            isTimerRunning = false;
+            sound.stopBGM();
+            sound.playSE('goal');
+            initConfetti();
+            
+            // 操作キーのリセット
+            keys.ArrowLeft = keys.ArrowRight = keys.ArrowDown = keys.Space = false;
+        }
+
+        // 7. カメラと落下
+        const targetCameraX = player.x - canvas.width / 2 + player.width / 2;
+        if (targetCameraX > cameraX) cameraX = targetCameraX;
+        if (player.y > canvas.height) {
+            gameState = 'gameover';
+            isTimerRunning = false;
+            sound.stopBGM();
+            keys.ArrowLeft = keys.ArrowRight = keys.ArrowDown = keys.Space = false;
+        }
+    }
+
+    // ==========================================
+    // 描画用の共通ヘルパー関数
+    // ==========================================
+    function drawEmoji(emoji, x, y, width, height, alpha = 1.0) {
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        let fontSize = Math.max(width, height);
+        ctx.font = `${fontSize}px sans-serif`;
+        ctx.fillText(emoji, x + width / 2, y + height / 2 + 4); 
+        ctx.restore();
+    }
+
+    // ==========================================
+    // メイン描画処理
+    // ==========================================
+    function draw() {
+        ctx.fillStyle = currentLevel.bg;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.save();
+        ctx.translate(-cameraX, 0);
+
+        // ゴールポールと旗
+        if (currentLevel.goal) {
+            ctx.fillStyle = '#FFF'; 
+            ctx.fillRect(currentLevel.goal.x, currentLevel.goal.y, currentLevel.goal.width, currentLevel.goal.height);
+            ctx.fillStyle = '#32CD32'; 
+            ctx.fillRect(currentLevel.goal.x - 40, currentLevel.goal.flagY, 40, 30);
+        }
+
+        // 床・壁・空中足場
+        for (let plat of currentLevel.platforms) {
+            ctx.fillStyle = (currentLevelKey === 'overworld') ? '#8B4513' : '#333';
+            ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
+            ctx.fillStyle = (currentLevelKey === 'overworld') ? '#32CD32' : '#555'; 
+            ctx.fillRect(plat.x, plat.y, plat.width, 4);
+        }
+
+        // 土管
+        for (let pipe of currentLevel.pipes) {
+            ctx.fillStyle = pipe.color; ctx.fillRect(pipe.x, pipe.y, pipe.width, pipe.height);
+            const lipHeight = 15;
+            if (pipe.type === 'pipe_down') ctx.fillRect(pipe.x - 4, pipe.y, pipe.width + 8, lipHeight);
+            else ctx.fillRect(pipe.x - 4, pipe.y + pipe.height - lipHeight, pipe.width + 8, lipHeight);
+            ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.fillRect(pipe.x + 10, pipe.y, 10, pipe.height);
+        }
+
+        // ブロック
+        for (let block of currentLevel.blocks) {
+            ctx.fillStyle = block.hit ? '#8B4513' : '#FFA500';
+            ctx.fillRect(block.x, block.y, block.width, block.height);
+            if (!block.hit && block.type !== 'solid') {
+                ctx.fillStyle = '#FFF'; ctx.font = '24px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText('?', block.x + block.width/2, block.y + block.height/2 + 2);
+            }
+        }
+
+        // コインとアイテム
+        for (let coin of currentLevel.coins) {
+            if (!coin.collected) drawEmoji('🪙', coin.x, coin.y, coin.width, coin.height);
+        }
+        for (let item of currentLevel.items) {
+            drawEmoji(item.emoji, item.x, item.y, item.width, item.height);
+        }
+
+        // 敵
+        for (let enemy of currentLevel.enemies) {
+            let alpha = enemy.dead ? 0.3 : 1.0;
+            drawEmoji(enemy.emoji, enemy.x, enemy.y, enemy.width, enemy.height, alpha);
+        }
+
+        // プレイヤー
+        if (player.invincibleCounter === 0 || Math.floor(player.invincibleCounter / 5) % 2 === 0) {
+            drawEmoji(player.emoji, player.x, player.y, player.width, player.height);
+        }
+
+        // パーティクル
+        if (gameState === 'goal') {
+            for (let p of particles) {
+                ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.size, p.size);
+            }
+        }
+
+        ctx.restore();
+
+        // --- UIレイヤー ---
+        ctx.fillStyle = '#FFF'; ctx.font = 'bold 24px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        ctx.fillText('🪙 COIN: ' + coinCount, 20, 40);
+        
+        ctx.font = 'bold 20px sans-serif';
+        ctx.fillText('TIME: ' + formatTime(elapsedTime), 20, 70);
+
+        if (!gameStarted) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // PC環境（タッチデバイスでない場合）のみメッセージを表示
+            if (!isTouchDevice) {
+                ctx.fillStyle = '#FFF'; 
+                ctx.font = 'bold 36px sans-serif'; 
+                ctx.textAlign = 'center';
+                ctx.fillText('Press SPACE or Arrow Keys to Start', canvas.width / 2, canvas.height / 2);
+            }
+        } else if (gameState === 'gameover') {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#FFF'; ctx.font = 'bold 48px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 20);
+            ctx.font = '24px sans-serif'; 
+            ctx.fillText(isTouchDevice ? 'Tap Screen to Retry' : 'Press SPACE to Retry', canvas.width / 2, canvas.height / 2 + 30);
+        } else if (gameState === 'goal') {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#FFF'; ctx.font = 'bold 48px sans-serif'; ctx.textAlign = 'center';
+            ctx.shadowColor = 'black'; ctx.shadowBlur = 10;
+            ctx.fillText('STAGE CLEAR!', canvas.width / 2, canvas.height / 2 - 40);
+            ctx.shadowBlur = 0; 
+            
+            ctx.fillStyle = '#FFD700'; ctx.font = 'bold 32px sans-serif';
+            ctx.fillText('Clear Time: ' + formatTime(elapsedTime), canvas.width / 2, canvas.height / 2 + 10);
+            
+            ctx.fillStyle = '#FFF'; ctx.font = '24px sans-serif';
+            ctx.fillText(isTouchDevice ? 'Tap Screen to Play Again' : 'Press SPACE to Play Again', canvas.width / 2, canvas.height / 2 + 60);
+        }
+    }
+
+    function gameLoop() {
+        update(); draw(); requestAnimationFrame(gameLoop);
+    }
+
+    initGame(); requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>
